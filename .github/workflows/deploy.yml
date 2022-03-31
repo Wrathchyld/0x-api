@@ -1,4 +1,4 @@
-name: Deploy
+⁹name: Deploy
 on:
     issue_comment:
         types: [created, edited]

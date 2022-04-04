@@ -152,7 +152,7 @@
         "@0x/utils": "^6.5.1",
         "@0x/web3-wrapper": "^7.6.3",
         "@ethersproject/hdnode": "^5.2.0",
-        "aws-sdk": "^2.908.0",
+        "aws-sdk": "^2.1092.0",
         "axios": "^0.21.1",
         "body-parser": "^1.19.0",
         "debug": "^4.1.1",

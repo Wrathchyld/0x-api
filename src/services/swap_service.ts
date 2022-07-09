@@ -5,10 +5,13 @@ import {
     artifacts,
     AssetSwapperContractAddresses,
     BlockParamLiteral,
+    ChainId,
     ContractAddresses,
     ERC20BridgeSource,
     FakeTakerContract,
     GetMarketOrdersRfqOpts,
+    IdentityFillAdjustor,
+    NATIVE_FEE_TOKEN_BY_CHAIN_ID,
     Orderbook,
     RfqFirmQuoteValidator,
     SwapQuote,
@@ -17,12 +20,8 @@ import {
     SwapQuoter,
     SwapQuoteRequestOpts,
     SwapQuoterOpts,
-} from '@0x/asset-swapper';
-import {
-    NATIVE_FEE_TOKEN_BY_CHAIN_ID,
     ZERO_AMOUNT,
-} from '@0x/asset-swapper/lib/src/utils/market_operation_utils/constants';
-import { ChainId } from '@0x/contract-addresses';
+} from '@0x/asset-swapper';
 import { WETH9Contract } from '@0x/contract-wrappers';
 import { ETH_TOKEN_ADDRESS, RevertError } from '@0x/protocol-utils';
 import { getTokenMetadataIfExists, TokenMetadatasForChains } from '@0x/token-metadata';
@@ -40,15 +39,15 @@ import {
     ASSET_SWAPPER_MARKET_ORDERS_OPTS_NO_VIP,
     CHAIN_ID,
     RFQT_REQUEST_MAX_RESPONSE_MS,
+    RFQ_CLIENT_ROLLOUT_PERCENT,
     RFQ_PROXY_ADDRESS,
     RFQ_PROXY_PORT,
     SWAP_QUOTER_OPTS,
     UNWRAP_QUOTE_GAS,
-    UNWRAP_WETH_GAS,
-    WRAP_ETH_GAS,
     WRAP_QUOTE_GAS,
 } from '../config';
 import {
+    DEFAULT_QUOTE_SLIPPAGE_PERCENTAGE,
     DEFAULT_VALIDATION_GAS_LIMIT,
     GAS_LIMIT_BUFFER_MULTIPLIER,
     NULL_ADDRESS,
@@ -71,14 +70,17 @@ import {
     TokenMetadataOptionalSymbol,
 } from '../types';
 import { altMarketResponseToAltOfferings } from '../utils/alt_mm_utils';
+import { isHashSmallEnough } from '../utils/hash_utils';
 import { marketDepthUtils } from '../utils/market_depth_utils';
 import { METRICS_PROXY } from '../utils/metrics_service';
 import { paginationUtils } from '../utils/pagination_utils';
 import { PairsManager } from '../utils/pairs_manager';
 import { createResultCache } from '../utils/result_cache';
+import { RfqClient } from '../utils/rfq_client';
 import { RfqDynamicBlacklist } from '../utils/rfq_dyanmic_blacklist';
 import { SAMPLER_METRICS } from '../utils/sampler_metrics';
 import { serviceUtils } from '../utils/service_utils';
+import { SlippageModelFillAdjustor } from '../utils/slippage_model_fill_adjustor';
 import { SlippageModelManager } from '../utils/slippage_model_manager';
 import { utils } from '../utils/utils';
 
@@ -198,7 +200,8 @@ export class SwapService {
         firmQuoteValidator?: RfqFirmQuoteValidator | undefined,
         rfqDynamicBlacklist?: RfqDynamicBlacklist,
         private readonly _pairsManager?: PairsManager,
-        private readonly _slippageModelManager?: SlippageModelManager,
+        readonly slippageModelManager?: SlippageModelManager,
+        private readonly _rfqClient?: RfqClient,
     ) {
         this._provider = provider;
         this._firmQuoteValidator = firmQuoteValidator;
@@ -274,6 +277,7 @@ export class SwapService {
             skipValidation,
             // tslint:enable:boolean-naming
             shouldSellEntireBalance,
+            enableSlippageProtection,
         } = params;
 
         let _rfqt: GetMarketOrdersRfqOpts | undefined;
@@ -329,6 +333,15 @@ export class SwapService {
             shouldGenerateQuoteReport,
             shouldIncludePriceComparisonsReport: !!includePriceComparisons,
             samplerMetrics: SAMPLER_METRICS,
+            fillAdjustor:
+                enableSlippageProtection && this.slippageModelManager
+                    ? new SlippageModelFillAdjustor(
+                          this.slippageModelManager,
+                          sellToken,
+                          buyToken,
+                          slippagePercentage || DEFAULT_QUOTE_SLIPPAGE_PERCENTAGE,
+                      )
+                    : new IdentityFillAdjustor(),
         };
 
         const marketSide = sellAmount !== undefined ? MarketOperation.Sell : MarketOperation.Buy;
@@ -338,12 +351,22 @@ export class SwapService {
                 : buyAmount!.times(affiliateFee.buyTokenPercentageFee + 1).integerValue(BigNumber.ROUND_DOWN);
 
         // Fetch the Swap quote
+        const rfqClient = isHashSmallEnough({
+            message:
+                `${assetSwapperOpts.rfqt?.txOrigin}-${sellToken}-${buyToken}-${amount}-${marketSide}`.toLowerCase(),
+            // tslint:disable-next-line: custom-no-magic-numbers
+            threshold: RFQ_CLIENT_ROLLOUT_PERCENT / 100,
+        })
+            ? this._rfqClient
+            : undefined;
+
         const swapQuote = await this._swapQuoter.getSwapQuoteAsync(
             buyToken,
             sellToken,
             amount!, // was validated earlier
             marketSide,
             assetSwapperOpts,
+            rfqClient,
         );
 
         const {
@@ -377,10 +400,7 @@ export class SwapService {
             },
         );
 
-        let conservativeBestCaseGasEstimate = new BigNumber(worstCaseGas)
-            .plus(affiliateFeeGasCost)
-            .plus(isETHSell ? WRAP_ETH_GAS : 0)
-            .plus(isETHBuy ? UNWRAP_WETH_GAS : 0);
+        let conservativeBestCaseGasEstimate = new BigNumber(worstCaseGas).plus(affiliateFeeGasCost);
 
         // Cannot eth_gasEstimate for /price when RFQ Native liquidity is included
         const isNativeIncluded = swapQuote.sourceBreakdown.Native !== undefined;
@@ -412,6 +432,8 @@ export class SwapService {
                         fauxGasEstimate,
                         realGasEstimate,
                         delta: realGasEstimate.minus(fauxGasEstimate),
+                        // tslint:disable-next-line:radix custom-no-magic-numbers
+                        accuracy: realGasEstimate.minus(fauxGasEstimate).dividedBy(realGasEstimate).toFixed(4),
                         buyToken,
                         sellToken,
                         sources: Object.keys(swapQuote.sourceBreakdown),
@@ -429,13 +451,7 @@ export class SwapService {
                 );
             }
         }
-        // If any sources can be undeterministic in gas costs, we add a buffer
-        const hasUndeterministicFills = _.flatten(swapQuote.orders.map((order) => order.fills)).some((fill) =>
-            [ERC20BridgeSource.Native, ERC20BridgeSource.MultiBridge].includes(fill.source),
-        );
-        const undeterministicMultiplier = hasUndeterministicFills ? GAS_LIMIT_BUFFER_MULTIPLIER : 1;
-        // Add a buffer to get the worst case gas estimate
-        const worstCaseGasEstimate = conservativeBestCaseGasEstimate.times(undeterministicMultiplier).integerValue();
+        const worstCaseGasEstimate = conservativeBestCaseGasEstimate;
         const { makerTokenDecimals, takerTokenDecimals } = swapQuote;
         const { price, guaranteedPrice } = SwapService._getSwapQuotePrice(
             buyAmount,
@@ -501,29 +517,21 @@ export class SwapService {
             blockNumber: swapQuote.blockNumber,
         };
 
-        if (integrator?.slippageModel === true) {
-            if (this._slippageModelManager) {
-                apiSwapQuote.expectedSlippage = this._slippageModelManager.calculateExpectedSlippage(
+        // If the slippage Model is forced on for the integrator, or if they have opted in to slippage protection
+        if (integrator?.slippageModel === true || enableSlippageProtection) {
+            if (this.slippageModelManager) {
+                apiSwapQuote.expectedSlippage = this.slippageModelManager.calculateExpectedSlippage(
                     buyToken,
                     sellToken,
                     apiSwapQuote.buyAmount,
                     apiSwapQuote.sellAmount,
-                    slippagePercentage ?? 0,
                     apiSwapQuote.sources,
+                    slippagePercentage!,
                 );
             } else {
-                apiSwapQuote.expectedSlippage = new BigNumber(0);
-            }
-
-            if (marketSide === MarketOperation.Sell) {
-                apiSwapQuote.expectedBuyAmount = apiSwapQuote.buyAmount.times(apiSwapQuote.expectedSlippage.plus(1));
-            } else {
-                apiSwapQuote.expectedSellAmount = apiSwapQuote.sellAmount.times(
-                    apiSwapQuote.expectedSlippage.times(-1).plus(1),
-                );
+                apiSwapQuote.expectedSlippage = null;
             }
         }
-
         return apiSwapQuote;
     }
 

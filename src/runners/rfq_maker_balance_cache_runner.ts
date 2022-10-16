@@ -1,6 +1,4 @@
 import { createMetricsRouter, MetricsService } from '@0x/api-utils';
-import { BalanceCheckerContract } from '@0x/asset-swapper';
-import { artifacts } from '@0x/asset-swapper/lib/src/artifacts';
 import { BlockParamLiteral, SupportedProvider, Web3Wrapper } from '@0x/dev-utils';
 import { BigNumber, logUtils } from '@0x/utils';
 import * as delay from 'delay';
@@ -9,6 +7,8 @@ import * as _ from 'lodash';
 import { Gauge, Summary } from 'prom-client';
 import { Connection } from 'typeorm';
 
+import { artifacts } from '../artifacts';
+import { BalanceCheckerContract } from '../asset-swapper';
 import * as defaultConfig from '../config';
 import { METRICS_PATH, ONE_SECOND_MS, RFQ_ALLOWANCE_TARGET, RFQ_FIRM_QUOTE_CACHE_EXPIRY } from '../constants';
 import { getDBConnectionAsync } from '../db_connection';
@@ -17,14 +17,12 @@ import { logger } from '../logger';
 import { providerUtils } from '../utils/provider_utils';
 import { createResultCache, ResultCache } from '../utils/result_cache';
 
-// tslint:disable-next-line:custom-no-magic-numbers
 const DELAY_WHEN_NEW_BLOCK_FOUND = ONE_SECOND_MS * 5;
 const DELAY_WHEN_NEW_BLOCK_NOT_FOUND = ONE_SECOND_MS;
-// tslint:disable-next-line:custom-no-magic-numbers
 const CACHE_MAKER_TOKENS_FOR_MS = Math.floor(RFQ_FIRM_QUOTE_CACHE_EXPIRY / 4);
 // The eth_call will run out of gas if there are too many balance calls at once
 const MAX_BALANCE_CHECKS_PER_CALL = 1000;
-const BALANCE_CHECKER_GAS_LIMIT = 5500000;
+const BALANCE_CHECKER_GAS_LIMIT = 10000000;
 // Maximum balances to save at once
 const MAX_ROWS_TO_UPDATE = 1000;
 
@@ -73,9 +71,9 @@ if (require.main === module) {
         logger.info('running RFQ balance cache runner');
 
         const provider = providerUtils.createWeb3Provider(
-            defaultConfig.defaultHttpServiceWithRateLimiterConfig.ethereumRpcUrl,
-            defaultConfig.defaultHttpServiceWithRateLimiterConfig.rpcRequestTimeout,
-            defaultConfig.defaultHttpServiceWithRateLimiterConfig.shouldCompressRequest,
+            defaultConfig.defaultHttpServiceConfig.ethereumRpcUrl,
+            defaultConfig.defaultHttpServiceConfig.rpcRequestTimeout,
+            defaultConfig.defaultHttpServiceConfig.shouldCompressRequest,
         );
         const web3Wrapper = new Web3Wrapper(provider);
 
@@ -113,6 +111,7 @@ async function runRfqBalanceCacheAsync(
 
     const workerId = _.uniqueId('rfqw_');
     let lastBlockSeen = -1;
+    // eslint-disable-next-line no-constant-condition
     while (true) {
         if (blockRequestErrors >= MAX_REQUEST_ERRORS) {
             throw new Error(`too many bad Web3 requests to fetch blocks (reached limit of ${MAX_REQUEST_ERRORS})`);

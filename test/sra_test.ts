@@ -1,5 +1,4 @@
 import { ErrorBody, GeneralErrorCodes, generalErrorCodeToReason, ValidationErrorCodes } from '@0x/api-utils';
-import { LimitOrder } from '@0x/asset-swapper';
 import { expect } from '@0x/contracts-test-utils';
 import { BlockchainLifecycle, Web3ProviderEngine, Web3Wrapper } from '@0x/dev-utils';
 import { BigNumber } from '@0x/utils';
@@ -10,10 +9,8 @@ import * as HttpStatus from 'http-status-codes';
 import * as _ from 'lodash';
 import 'mocha';
 
-// Force reload of the app avoid variables being polluted between test suites
-delete require.cache[require.resolve('../src/app')];
-
 import { AppDependencies, getAppAsync, getDefaultAppDependenciesAsync } from '../src/app';
+import { LimitOrder } from '../src/asset-swapper';
 import * as config from '../src/config';
 import { DEFAULT_PAGE, DEFAULT_PER_PAGE, NULL_ADDRESS, ONE_SECOND_MS, SRA_PATH } from '../src/constants';
 import { OrderWatcherSignedOrderEntity } from '../src/entities';
@@ -32,6 +29,9 @@ import { setupDependenciesAsync, teardownDependenciesAsync } from './utils/deplo
 import { constructRoute, httpGetAsync, httpPostAsync } from './utils/http_utils';
 import { getRandomSignedLimitOrderAsync } from './utils/orders';
 
+// Force reload of the app avoid variables being polluted between test suites
+delete require.cache[require.resolve('../src/app')];
+
 const SUITE_NAME = 'Standard Relayer API (SRA) integration tests';
 
 const EMPTY_PAGINATED_RESPONSE = {
@@ -44,7 +44,7 @@ const EMPTY_PAGINATED_RESPONSE = {
 const ONE_THOUSAND_IN_BASE = new BigNumber('1000000000000000000000');
 
 const NOW = Math.floor(Date.now() / ONE_SECOND_MS);
-const TOMORROW = new BigNumber(NOW + 24 * 3600); // tslint:disable-line:custom-no-magic-numbers
+const TOMORROW = new BigNumber(NOW + 24 * 3600);
 
 describe(SUITE_NAME, () => {
     let app: Express.Application;
@@ -393,7 +393,6 @@ describe(SUITE_NAME, () => {
                 makerToken: ZRX_TOKEN_ADDRESS,
                 takerToken: WETH_TOKEN_ADDRESS,
                 makerAmount: MAX_MINT_AMOUNT,
-                // tslint:disable:custom-no-magic-numbers
                 takerAmount: ONE_THOUSAND_IN_BASE.multipliedBy(3),
                 chainId: CHAIN_ID,
                 expiry: TOMORROW,
@@ -417,7 +416,6 @@ describe(SUITE_NAME, () => {
                 makerToken: ZRX_TOKEN_ADDRESS,
                 takerToken: WETH_TOKEN_ADDRESS,
                 makerAmount: MAX_MINT_AMOUNT,
-                // tslint:disable:custom-no-magic-numbers
                 takerAmount: ONE_THOUSAND_IN_BASE.multipliedBy(3),
                 chainId: CHAIN_ID,
                 expiry: TOMORROW,
@@ -440,7 +438,6 @@ describe(SUITE_NAME, () => {
                 makerToken: ZRX_TOKEN_ADDRESS,
                 takerToken: WETH_TOKEN_ADDRESS,
                 makerAmount: MAX_MINT_AMOUNT,
-                // tslint:disable:custom-no-magic-numbers
                 takerAmount: ONE_THOUSAND_IN_BASE.multipliedBy(3),
                 chainId: CHAIN_ID,
                 expiry: TOMORROW,
@@ -456,4 +453,3 @@ describe(SUITE_NAME, () => {
         });
     });
 });
-// tslint:disable:max-file-line-count

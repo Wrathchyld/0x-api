@@ -1,9 +1,8 @@
-import { AffiliateFeeType, ERC20BridgeSource } from '@0x/asset-swapper';
 import { expect, randomAddress } from '@0x/contracts-test-utils';
 import { BigNumber } from '@0x/utils';
-// tslint:disable-next-line:no-implicit-dependencies
 import 'mocha';
 
+import { AffiliateFeeType, ERC20BridgeSource } from '../src/asset-swapper';
 import { AFFILIATE_FEE_TRANSFORMER_GAS, POSITIVE_SLIPPAGE_FEE_TRANSFORMER_GAS, ZERO } from '../src/constants';
 import { serviceUtils } from '../src/utils/service_utils';
 
@@ -12,7 +11,6 @@ import { randomSellQuote } from './utils/mocks';
 
 const SUITE_NAME = 'serviceUtils';
 
-// tslint:disable:custom-no-magic-numbers
 describe(SUITE_NAME, () => {
     describe('excludeProprietarySources', () => {
         it('will exclude liquidity provider if an API key is not present or invalid', () => {
@@ -118,6 +116,23 @@ describe(SUITE_NAME, () => {
             buyTokenFeeAmount: ZERO,
             sellTokenFeeAmount: ZERO,
             gasCost: POSITIVE_SLIPPAGE_FEE_TRANSFORMER_GAS,
+        });
+    });
+    it('returns the correct amounts if gasless', () => {
+        const affiliateFee = {
+            feeType: AffiliateFeeType.GaslessFee,
+            recipient: randomAddress(),
+            buyTokenPercentageFee: 0,
+            sellTokenPercentageFee: 0,
+        };
+        const costInfo = serviceUtils.getAffiliateFeeAmounts(randomSellQuote, affiliateFee);
+        expect(costInfo).to.deep.equal({
+            buyTokenFeeAmount: randomSellQuote.gasPrice
+                .times(randomSellQuote.worstCaseQuoteInfo.gas)
+                .times(randomSellQuote.makerAmountPerEth)
+                .integerValue(BigNumber.ROUND_DOWN),
+            sellTokenFeeAmount: ZERO,
+            gasCost: AFFILIATE_FEE_TRANSFORMER_GAS,
         });
     });
 });

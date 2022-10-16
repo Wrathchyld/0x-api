@@ -1,3 +1,9 @@
+import { getTokenMetadataIfExists } from '@0x/token-metadata';
+import { MarketOperation } from '@0x/types';
+import { BigNumber } from '@0x/utils';
+import { Web3Wrapper } from '@0x/web3-wrapper';
+import * as _ from 'lodash';
+
 import {
     ChainId,
     DEFAULT_GAS_SCHEDULE,
@@ -6,13 +12,7 @@ import {
     PriceComparisonsReport,
     SELL_SOURCE_FILTER_BY_CHAIN_ID,
     UniswapV2FillData,
-} from '@0x/asset-swapper';
-import { getTokenMetadataIfExists } from '@0x/token-metadata';
-import { MarketOperation } from '@0x/types';
-import { BigNumber } from '@0x/utils';
-import { Web3Wrapper } from '@0x/web3-wrapper';
-import * as _ from 'lodash';
-
+} from '../asset-swapper';
 import { CHAIN_ID } from '../config';
 import { GAS_LIMIT_BUFFER_MULTIPLIER, TX_BASE_GAS, ZERO } from '../constants';
 import { logger } from '../logger';
@@ -26,18 +26,14 @@ const gasScheduleWithOverrides: GasSchedule = {
     ...DEFAULT_GAS_SCHEDULE,
     [ERC20BridgeSource.UniswapV2]: (fillData) => {
         let gas = 1.5e5;
-        // tslint:disable-next-line:custom-no-magic-numbers
         if ((fillData as UniswapV2FillData).tokenAddressPath.length > 2) {
-            // tslint:disable-next-line:custom-no-magic-numbers
             gas += 5e4;
         }
         return gas;
     },
     [ERC20BridgeSource.SushiSwap]: (fillData) => {
         let gas = 1.5e5;
-        // tslint:disable-next-line:custom-no-magic-numbers
         if ((fillData as UniswapV2FillData).tokenAddressPath.length > 2) {
-            // tslint:disable-next-line:custom-no-magic-numbers
             gas += 5e4;
         }
         return gas;

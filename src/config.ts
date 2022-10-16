@@ -1,5 +1,11 @@
-// tslint:disable:custom-no-magic-numbers max-file-line-count
 import { assert } from '@0x/assert';
+import { nativeWrappedTokenSymbol, TokenMetadatasForChains, valueByChainId } from '@0x/token-metadata';
+import { BigNumber } from '@0x/utils';
+import * as fs from 'fs';
+import * as _ from 'lodash';
+import { linearBuckets } from 'prom-client';
+import * as validateUUID from 'uuid-validate';
+
 import {
     BlockParamLiteral,
     ChainId,
@@ -13,22 +19,14 @@ import {
     SwapQuoteRequestOpts,
     SwapQuoterOpts,
     SwapQuoterRfqOpts,
-} from '@0x/asset-swapper';
-import { nativeWrappedTokenSymbol, TokenMetadatasForChains, valueByChainId } from '@0x/token-metadata';
-import { BigNumber } from '@0x/utils';
-import * as fs from 'fs';
-import * as _ from 'lodash';
-import { linearBuckets } from 'prom-client';
-import * as validateUUID from 'uuid-validate';
-
+} from './asset-swapper';
 import {
-    DEFAULT_ETH_GAS_STATION_API_URL,
-    DEFAULT_EXPECTED_MINED_SEC,
     DEFAULT_FALLBACK_SLIPPAGE_PERCENTAGE,
     DEFAULT_LOCAL_POSTGRES_URI,
-    DEFAULT_LOCAL_REDIS_URI,
     DEFAULT_LOGGER_INCLUDE_TIMESTAMP,
+    DEFAULT_META_TX_MIN_ALLOWED_SLIPPAGE,
     DEFAULT_QUOTE_SLIPPAGE_PERCENTAGE,
+    DEFAULT_ZERO_EX_GAS_API_URL,
     HEALTHCHECK_PATH,
     METRICS_PATH,
     NULL_ADDRESS,
@@ -36,21 +34,20 @@ import {
     ONE_MINUTE_MS,
     ORDERBOOK_PATH,
     QUOTE_ORDER_EXPIRATION_BUFFER_MS,
+    TEN_MINUTES_MS,
     TX_BASE_GAS,
 } from './constants';
 import { schemas } from './schemas';
-import { HttpServiceConfig, MetaTransactionRateLimitConfig } from './types';
-import { parseUtils } from './utils/parse_utils';
+import { HttpServiceConfig } from './types';
 import { schemaUtils } from './utils/schema_utils';
 
 const SHOULD_USE_RUST_ROUTER = process.env.RUST_ROUTER === 'true';
-
-// tslint:disable:no-bitwise
 
 enum EnvVarType {
     AddressList,
     StringList,
     Integer,
+    Float,
     Port,
     KeepAliveTimeout,
     ChainId,
@@ -246,10 +243,13 @@ export const SLIPPAGE_MODEL_S3_BUCKET_NAME: string | undefined = _.isEmpty(proce
           process.env.SLIPPAGE_MODEL_S3_BUCKET_NAME,
           EnvVarType.NonEmptyString,
       );
-export const SLIPPAGE_MODEL_S3_FILE_NAME: string = `SlippageModel-${CHAIN_ID}.json`;
-export const SLIPPAGE_MODEL_S3_API_VERSION: string = '2006-03-01';
+export const SLIPPAGE_MODEL_S3_FILE_NAME = `SlippageModel-${CHAIN_ID}.json`;
+export const SLIPPAGE_MODEL_S3_API_VERSION = '2006-03-01';
 export const SLIPPAGE_MODEL_S3_FILE_VALID_INTERVAL_MS: number = ONE_HOUR_MS * 2;
 export const SLIPPAGE_MODEL_REFRESH_INTERVAL_MS: number = ONE_MINUTE_MS * 1;
+export const META_TX_MIN_ALLOWED_SLIPPAGE: number = _.isEmpty(process.env.META_TX_MIN_ALLOWED_SLIPPAGE)
+    ? DEFAULT_META_TX_MIN_ALLOWED_SLIPPAGE
+    : assertEnvVarType('META_TX_MIN_ALLOWED_SLIPPAGE', process.env.META_TX_MIN_ALLOWED_SLIPPAGE, EnvVarType.Float);
 
 export const ORDER_WATCHER_URL = _.isEmpty(process.env.ORDER_WATCHER_URL)
     ? 'http://127.0.0.1:8080'
@@ -312,8 +312,6 @@ export const POSTGRES_READ_REPLICA_URIS: string[] | undefined = _.isEmpty(proces
     ? undefined
     : assertEnvVarType('POSTGRES_READ_REPLICA_URIS', process.env.POSTGRES_READ_REPLICA_URIS, EnvVarType.UrlList);
 
-export const REDIS_URI = _.isEmpty(process.env.REDIS_URI) ? DEFAULT_LOCAL_REDIS_URI : process.env.REDIS_URI;
-
 // Should the logger include time field in the output logs, defaults to true.
 export const LOGGER_INCLUDE_TIMESTAMP = _.isEmpty(process.env.LOGGER_INCLUDE_TIMESTAMP)
     ? DEFAULT_LOGGER_INCLUDE_TIMESTAMP
@@ -342,12 +340,8 @@ export const PLP_API_KEY_WHITELIST: string[] = getApiKeyWhitelistFromIntegrators
 export const RFQT_MAKER_CONFIG_MAP_FOR_RFQ_ORDER: MakerIdsToConfigs = getMakerConfigMapForOrderType('rfq', 'rfqt');
 export const MATCHA_INTEGRATOR_ID: string | undefined = getIntegratorIdFromLabel('Matcha');
 
-export const RFQ_API_URL: string = resolveEnvVar<string>('RFQ_API_URL', EnvVarType.NonEmptyString, '');
-export const RFQ_CLIENT_ROLLOUT_PERCENT: number = resolveEnvVar<number>(
-    'RFQ_CLIENT_ROLLOUT_PERCENT',
-    EnvVarType.Integer,
-    0,
-);
+export const RFQ_CLIENT_ROLLOUT_PERCENT: number = resolveEnvVar('RFQ_CLIENT_ROLLOUT_PERCENT', EnvVarType.Integer, 0);
+export const RFQ_API_URL: string = resolveEnvVar('RFQ_API_URL', EnvVarType.NonEmptyString, '');
 export const RFQT_TX_ORIGIN_BLACKLIST: Set<string> = new Set(
     resolveEnvVar<string[]>('RFQT_TX_ORIGIN_BLACKLIST', EnvVarType.JsonStringList, []).map((addr) =>
         addr.toLowerCase(),
@@ -376,30 +370,8 @@ export const RFQM_MAKER_ASSET_OFFERINGS = resolveEnvVar<RfqMakerAssetOfferings>(
     {},
 );
 
-export const META_TX_WORKER_REGISTRY: string | undefined = _.isEmpty(process.env.META_TX_WORKER_REGISTRY)
-    ? undefined
-    : assertEnvVarType('META_TX_WORKER_REGISTRY', process.env.META_TX_WORKER_REGISTRY, EnvVarType.ETHAddressHex);
+export const META_TX_EXPIRATION_BUFFER_MS = TEN_MINUTES_MS;
 
-export const META_TX_WORKER_MNEMONIC: string | undefined = _.isEmpty(process.env.META_TX_WORKER_MNEMONIC)
-    ? undefined
-    : assertEnvVarType('META_TX_WORKER_MNEMONIC', process.env.META_TX_WORKER_MNEMONIC, EnvVarType.NonEmptyString);
-
-export const RFQM_WORKER_INDEX: number | undefined = _.isEmpty(process.env.RFQM_WORKER_INDEX)
-    ? undefined
-    : assertEnvVarType('RFQM_WORKER_INDEX', process.env.RFQM_WORKER_INDEX, EnvVarType.Integer);
-
-export const RFQM_META_TX_SQS_URL: string | undefined = _.isEmpty(process.env.RFQM_META_TX_SQS_URL)
-    ? undefined
-    : assertEnvVarType('RFQM_META_TX_SQS_URL', process.env.RFQM_META_TX_SQS_URL, EnvVarType.Url);
-
-// If set to TRUE, system health will change to MAINTENANCE and integrators will be told to not
-// send RFQM orders.
-// tslint:disable-next-line boolean-naming
-export const RFQM_MAINTENANCE_MODE: boolean = _.isEmpty(process.env.RFQM_MAINTENANCE_MODE)
-    ? false
-    : assertEnvVarType('RFQM_MAINTENANCE_MODE', process.env.RFQM_MAINTENANCE_MODE, EnvVarType.Boolean);
-
-// tslint:disable-next-line:boolean-naming
 export const RFQT_REQUEST_MAX_RESPONSE_MS: number = _.isEmpty(process.env.RFQT_REQUEST_MAX_RESPONSE_MS)
     ? 600
     : assertEnvVarType('RFQT_REQUEST_MAX_RESPONSE_MS', process.env.RFQT_REQUEST_MAX_RESPONSE_MS, EnvVarType.Integer);
@@ -414,51 +386,7 @@ export const SRA_PERSISTENT_ORDER_POSTING_WHITELISTED_API_KEYS: string[] =
               EnvVarType.APIKeys,
           );
 
-// Whitelisted 0x API keys that can use the meta-txn /submit endpoint
-export const META_TXN_SUBMIT_WHITELISTED_API_KEYS: string[] =
-    process.env.META_TXN_SUBMIT_WHITELISTED_API_KEYS === undefined
-        ? []
-        : assertEnvVarType(
-              'META_TXN_SUBMIT_WHITELISTED_API_KEYS',
-              process.env.META_TXN_SUBMIT_WHITELISTED_API_KEYS,
-              EnvVarType.APIKeys,
-          );
-
-// The meta-txn relay sender private keys managed by the TransactionWatcher
-export const META_TXN_RELAY_PRIVATE_KEYS: string[] = _.isEmpty(process.env.META_TXN_RELAY_PRIVATE_KEYS)
-    ? []
-    : assertEnvVarType('META_TXN_RELAY_PRIVATE_KEYS', process.env.META_TXN_RELAY_PRIVATE_KEYS, EnvVarType.StringList);
-
-// The expected time for a meta-txn to be included in a block.
-export const META_TXN_RELAY_EXPECTED_MINED_SEC: number = _.isEmpty(process.env.META_TXN_RELAY_EXPECTED_MINED_SEC)
-    ? DEFAULT_EXPECTED_MINED_SEC
-    : assertEnvVarType(
-          'META_TXN_RELAY_EXPECTED_MINED_SEC',
-          process.env.META_TXN_RELAY_EXPECTED_MINED_SEC,
-          EnvVarType.Integer,
-      );
-// Should TransactionWatcherSignerService sign transactions
-// tslint:disable-next-line:boolean-naming
-export const META_TXN_SIGNING_ENABLED: boolean = _.isEmpty(process.env.META_TXN_SIGNING_ENABLED)
-    ? true
-    : assertEnvVarType('META_TXN_SIGNING_ENABLED', process.env.META_TXN_SIGNING_ENABLED, EnvVarType.Boolean);
-// The maximum gas price (in gwei) the service will allow
-export const META_TXN_MAX_GAS_PRICE_GWEI: BigNumber = _.isEmpty(process.env.META_TXN_MAX_GAS_PRICE_GWEI)
-    ? new BigNumber(50)
-    : assertEnvVarType('META_TXN_MAX_GAS_PRICE_GWEI', process.env.META_TXN_MAX_GAS_PRICE_GWEI, EnvVarType.UnitAmount);
-
-export const META_TXN_RATE_LIMITER_CONFIG: MetaTransactionRateLimitConfig | undefined = _.isEmpty(
-    process.env.META_TXN_RATE_LIMIT_TYPE,
-)
-    ? undefined
-    : assertEnvVarType(
-          'META_TXN_RATE_LIMITER_CONFIG',
-          process.env.META_TXN_RATE_LIMITER_CONFIG,
-          EnvVarType.RateLimitConfig,
-      );
-
 // Whether or not prometheus metrics should be enabled.
-// tslint:disable-next-line:boolean-naming
 export const ENABLE_PROMETHEUS_METRICS: boolean = _.isEmpty(process.env.ENABLE_PROMETHEUS_METRICS)
     ? false
     : assertEnvVarType('ENABLE_PROMETHEUS_METRICS', process.env.ENABLE_PROMETHEUS_METRICS, EnvVarType.Boolean);
@@ -467,14 +395,10 @@ export const PROMETHEUS_PORT: number = _.isEmpty(process.env.PROMETHEUS_PORT)
     ? 8080
     : assertEnvVarType('PROMETHEUS_PORT', process.env.PROMETHEUS_PORT, EnvVarType.Port);
 
-// Eth Gas Station URL
-export const ETH_GAS_STATION_API_URL: string = _.isEmpty(process.env.ETH_GAS_STATION_API_URL)
-    ? DEFAULT_ETH_GAS_STATION_API_URL
-    : assertEnvVarType('ETH_GAS_STATION_API_URL', process.env.ETH_GAS_STATION_API_URL, EnvVarType.Url);
-
-export const RFQ_PROXY_ADDRESS: string | undefined = _.isEmpty(process.env.RFQ_PROXY_ADDRESS)
-    ? undefined
-    : assertEnvVarType('RFQ_PROXY_ADDRESS', process.env.RFQ_PROXY_ADDRESS, EnvVarType.NonEmptyString);
+// ZeroEx Gas API URL
+export const ZERO_EX_GAS_API_URL: string = _.isEmpty(process.env.ZERO_EX_GAS_API_URL)
+    ? DEFAULT_ZERO_EX_GAS_API_URL
+    : assertEnvVarType('ZERO_EX_GAS_API_URL', process.env.ZERO_EX_GAS_API_URL, EnvVarType.Url);
 
 export const RFQ_PROXY_PORT: number | undefined = _.isEmpty(process.env.RFQ_PROXY_PORT)
     ? undefined
@@ -483,6 +407,30 @@ export const RFQ_PROXY_PORT: number | undefined = _.isEmpty(process.env.RFQ_PROX
 export const KAFKA_TOPIC_QUOTE_REPORT: string = _.isEmpty(process.env.KAFKA_TOPIC_QUOTE_REPORT)
     ? undefined
     : assertEnvVarType('KAFKA_TOPIC_QUOTE_REPORT', process.env.KAFKA_TOPIC_QUOTE_REPORT, EnvVarType.NonEmptyString);
+
+export const SENTRY_ENABLED: boolean = _.isEmpty(process.env.SENTRY_ENABLED)
+    ? false
+    : assertEnvVarType('SENTRY_ENABLED', process.env.SENTRY_ENABLED, EnvVarType.Boolean);
+
+export const SENTRY_ENVIRONMENT: string = _.isEmpty(process.env.SENTRY_ENVIRONMENT)
+    ? 'development'
+    : assertEnvVarType('SENTRY_ENVIRONMENT', process.env.SENTRY_ENVIRONMENT, EnvVarType.NonEmptyString);
+
+export const SENTRY_DSN: string = _.isEmpty(process.env.SENTRY_DSN)
+    ? undefined
+    : assertEnvVarType('SENTRY_DSN', process.env.SENTRY_DSN, EnvVarType.Url);
+
+export const SENTRY_SAMPLE_RATE: number = _.isEmpty(process.env.SENTRY_SAMPLE_RATE)
+    ? 0.1
+    : assertEnvVarType('SENTRY_SAMPLE_RATE', process.env.SENTRY_SAMPLE_RATE, EnvVarType.Float);
+
+export const SENTRY_TRACES_SAMPLE_RATE: number = _.isEmpty(process.env.SENTRY_TRACES_SAMPLE_RATE)
+    ? 0.1
+    : assertEnvVarType('SENTRY_TRACES_SAMPLE_RATE', process.env.SENTRY_TRACES_SAMPLE_RATE, EnvVarType.Float);
+
+export const GASLESS_SWAP_FEE_ENABLED: boolean = _.isEmpty(process.env.GASLESS_SWAP_FEE_ENABLED)
+    ? false
+    : assertEnvVarType('GASLESS_SWAP_FEE_ENABLED', process.env.GASLESS_SWAP_FEE_ENABLED, EnvVarType.Boolean);
 
 // Max number of entities per page
 export const MAX_PER_PAGE = 1000;
@@ -514,31 +462,21 @@ const EXCLUDED_SOURCES = (() => {
             return allERC20BridgeSources.filter(
                 (s) => s !== ERC20BridgeSource.Native && s !== ERC20BridgeSource.UniswapV2,
             );
-        case ChainId.Ropsten:
-            const supportedRopstenSources = new Set([
-                ERC20BridgeSource.Native,
-                ERC20BridgeSource.SushiSwap,
-                ERC20BridgeSource.Uniswap,
-                ERC20BridgeSource.UniswapV2,
-                ERC20BridgeSource.UniswapV3,
-                ERC20BridgeSource.Curve,
-                ERC20BridgeSource.Mooniswap,
-            ]);
-            return allERC20BridgeSources.filter((s) => !supportedRopstenSources.has(s));
+        case ChainId.Ganache:
+            return allERC20BridgeSources.filter((s) => s !== ERC20BridgeSource.Native);
         case ChainId.BSC:
-            return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         case ChainId.Polygon:
-            return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         case ChainId.Avalanche:
-            return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         case ChainId.Celo:
-            return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         case ChainId.Fantom:
-            return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         case ChainId.Optimism:
+        case ChainId.Goerli:
+        case ChainId.PolygonMumbai:
+        case ChainId.ArbitrumRinkeby:
+        case ChainId.Arbitrum:
             return [ERC20BridgeSource.MultiBridge, ERC20BridgeSource.Native];
         default:
-            return allERC20BridgeSources.filter((s) => s !== ERC20BridgeSource.Native);
+            throw new Error(`Excluded sources not specified for ${CHAIN_ID}`);
     }
 })();
 
@@ -548,8 +486,6 @@ const EXCLUDED_FEE_SOURCES = (() => {
             return [];
         case ChainId.Kovan:
             return [ERC20BridgeSource.Uniswap];
-        case ChainId.Ropsten:
-            return [];
         case ChainId.BSC:
             return [ERC20BridgeSource.Uniswap];
         case ChainId.Polygon:
@@ -581,7 +517,6 @@ const EXCHANGE_PROXY_OVERHEAD_FULLY_FEATURED = (sourceFlags: bigint) => {
             SOURCE_FLAGS.PancakeSwap_V2,
             SOURCE_FLAGS.BakerySwap,
             SOURCE_FLAGS.ApeSwap,
-            SOURCE_FLAGS.CheeseSwap,
         ].includes(sourceFlags) &&
         CHAIN_ID === ChainId.BSC
     ) {
@@ -649,7 +584,6 @@ export const SAMPLER_OVERRIDES: SamplerOverrides | undefined = (() => {
 
 let SWAP_QUOTER_RFQT_OPTS: SwapQuoterRfqOpts = {
     integratorsWhitelist: RFQT_INTEGRATORS,
-    makerAssetOfferings: RFQT_MAKER_ASSET_OFFERINGS,
     txOriginBlacklist: RFQT_TX_ORIGIN_BLACKLIST,
 };
 
@@ -667,7 +601,7 @@ export const SWAP_QUOTER_OPTS: Partial<SwapQuoterOpts> = {
     chainId: CHAIN_ID,
     expiryBufferMs: QUOTE_ORDER_EXPIRATION_BUFFER_MS,
     rfqt: SWAP_QUOTER_RFQT_OPTS,
-    ethGasStationUrl: ETH_GAS_STATION_API_URL,
+    zeroExGasApiUrl: ZERO_EX_GAS_API_URL,
     permittedOrderFeeTypes: new Set([OrderPrunerPermittedFeeTypes.NoFees]),
     samplerOverrides: SAMPLER_OVERRIDES,
     tokenAdjacencyGraph: DEFAULT_TOKEN_ADJACENCY_GRAPH_BY_CHAIN_ID[CHAIN_ID],
@@ -688,11 +622,6 @@ export const defaultHttpServiceConfig: HttpServiceConfig = {
     kafkaConsumerGroupId: KAFKA_CONSUMER_GROUP_ID,
     rpcRequestTimeout: RPC_REQUEST_TIMEOUT,
     shouldCompressRequest: ENABLE_RPC_REQUEST_COMPRESSION,
-};
-
-export const defaultHttpServiceWithRateLimiterConfig: HttpServiceConfig = {
-    ...defaultHttpServiceConfig,
-    metaTxnRateLimiters: META_TXN_RATE_LIMITER_CONFIG,
 };
 
 export const getIntegratorByIdOrThrow = (
@@ -777,13 +706,14 @@ function resolveEnvVar<T>(envVar: string, envVarType: EnvVarType, fallback: T): 
 function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): any {
     let returnValue;
     switch (expectedType) {
-        case EnvVarType.Port:
+        case EnvVarType.Port: {
             returnValue = parseInt(value, 10);
             const isWithinRange = returnValue >= 0 && returnValue <= 65535;
             if (isNaN(returnValue) || !isWithinRange) {
                 throw new Error(`${name} must be between 0 to 65535, found ${value}.`);
             }
             return returnValue;
+        }
         case EnvVarType.ChainId:
         case EnvVarType.KeepAliveTimeout:
         case EnvVarType.Integer:
@@ -792,17 +722,24 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 throw new Error(`${name} must be a valid integer, found ${value}.`);
             }
             return returnValue;
+        case EnvVarType.Float:
+            returnValue = parseFloat(value);
+            if (isNaN(returnValue)) {
+                throw new Error(`${name} must be a valid float, found ${value}`);
+            }
+            return returnValue;
         case EnvVarType.ETHAddressHex:
             assert.isETHAddressHex(name, value);
             return value;
         case EnvVarType.Url:
             assert.isUri(name, value);
             return value;
-        case EnvVarType.UrlList:
+        case EnvVarType.UrlList: {
             assert.isString(name, value);
             const urlList = (value as string).split(',');
             urlList.forEach((url, i) => assert.isUri(`${name}[${i}]`, url));
             return urlList;
+        }
         case EnvVarType.Boolean:
             return value === 'true';
         case EnvVarType.UnitAmount:
@@ -811,15 +748,17 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 throw new Error(`${name} must be valid number greater than 0.`);
             }
             return returnValue;
-        case EnvVarType.AddressList:
+        case EnvVarType.AddressList: {
             assert.isString(name, value);
             const addressList = (value as string).split(',').map((a) => a.toLowerCase());
             addressList.forEach((a, i) => assert.isETHAddressHex(`${name}[${i}]`, a));
             return addressList;
-        case EnvVarType.StringList:
+        }
+        case EnvVarType.StringList: {
             assert.isString(name, value);
             const stringList = (value as string).split(',');
             return stringList;
+        }
         case EnvVarType.WhitelistAllTokens:
             return '*';
         case EnvVarType.NonEmptyString:
@@ -828,10 +767,7 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 throw new Error(`${name} must be supplied`);
             }
             return value;
-        case EnvVarType.RateLimitConfig:
-            assert.isString(name, value);
-            return parseUtils.parseJsonStringForMetaTransactionRateLimitConfigOrThrow(value);
-        case EnvVarType.APIKeys:
+        case EnvVarType.APIKeys: {
             assert.isString(name, value);
             const apiKeys = (value as string).split(',').filter((key) => !!key.trim());
             apiKeys.forEach((apiKey) => {
@@ -841,12 +777,13 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 }
             });
             return apiKeys;
-        case EnvVarType.JsonStringList:
+        }
+        case EnvVarType.JsonStringList: {
             assert.isString(name, value);
             return JSON.parse(value);
-        case EnvVarType.RfqMakerAssetOfferings:
+        }
+        case EnvVarType.RfqMakerAssetOfferings: {
             const offerings: RfqMakerAssetOfferings = JSON.parse(value);
-            // tslint:disable-next-line:forin
             for (const makerEndpoint in offerings) {
                 assert.isWebUri('market maker endpoint', makerEndpoint);
 
@@ -873,9 +810,9 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 });
             }
             return offerings;
-        case EnvVarType.LiquidityProviderRegistry:
+        }
+        case EnvVarType.LiquidityProviderRegistry: {
             const registry: LiquidityProviderRegistry = JSON.parse(value);
-            // tslint:disable-next-line:forin
             for (const liquidityProvider in registry) {
                 assert.isETHAddressHex('liquidity provider address', liquidityProvider);
 
@@ -888,7 +825,7 @@ function assertEnvVarType(name: string, value: any, expectedType: EnvVarType): a
                 // assert.isNumber(`gas cost for liquidity provider ${liquidityProvider}`, gasCost);
             }
             return registry;
-
+        }
         default:
             throw new Error(`Unrecognised EnvVarType: ${expectedType} encountered for variable ${name}.`);
     }

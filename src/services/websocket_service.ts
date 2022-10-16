@@ -24,7 +24,6 @@ import { OrderWatcherEvent, orderWatcherEventToSRAOrder } from '../utils/order_w
 import { schemaUtils } from '../utils/schema_utils';
 
 const getRandomKafkaConsumerGroupId = (): string => {
-    // tslint:disable:custom-no-magic-numbers
     const randomHex = hexUtils.random(4).substr(2);
     return `sra_0x_api_service_${randomHex}`;
 };
@@ -185,13 +184,14 @@ export class WebsocketService {
         schemaUtils.validateSchema(message, schemas.sraOrdersChannelSubscribeSchema);
         const { requestId, payload, type } = message;
         switch (type) {
-            case MessageTypes.Subscribe:
+            case MessageTypes.Subscribe: {
                 ws.requestIds.add(requestId);
                 const subscriptionOpts =
                     payload === undefined || _.isEmpty(payload) ? 'ALL_SUBSCRIPTION_OPTS' : payload;
                 this._requestIdToSubscriptionOpts.set(requestId, subscriptionOpts);
                 this._requestIdToSocket.set(requestId, ws);
                 break;
+            }
             default:
                 throw new NotImplementedError(message.type);
         }
@@ -217,13 +217,11 @@ export class WebsocketService {
             }
         };
     }
-    // tslint:disable-next-line:prefer-function-over-method
     private _processError(ws: WrappedWebSocket, err: Error): void {
         const { errorBody } = errorUtils.generateError(err);
         ws.send(JSON.stringify(errorBody));
         ws.terminate();
     }
-    // tslint:disable-next-line:prefer-function-over-method
     private _pongHandler(ws: WrappedWebSocket): () => void {
         return () => {
             ws.isAlive = true;
